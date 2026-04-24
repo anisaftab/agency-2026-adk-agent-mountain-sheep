@@ -6,7 +6,7 @@
 
 ## Demo Screencast
 
-<video src="screencast.mp4" width="100%" controls autoplay loop></video>
+![Demo Screencast](screencast.gif)
 
 ## What This Agent Does
 
