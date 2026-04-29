@@ -20,6 +20,53 @@ export interface EdgeData {
   from: string;
   to: string;
   loop: boolean;
+  relation?: string;
+  amount?: number | null;
+}
+
+export interface GraphData {
+  nodes: NodeData[];
+  edges: EdgeData[];
+}
+
+export interface InsightData {
+  title: string;
+  severity: 'HIGH' | 'MEDIUM' | 'LOW';
+  summary: string;
+  evidence: string[];
+}
+
+export interface AgentGraphNode {
+  id?: string;
+  label?: string;
+  short?: string;
+  type?: NodeType;
+  risk?: RiskLevel;
+  bn?: string | null;
+  flags?: string[];
+  brief?: string;
+}
+
+export interface AgentGraphEdge {
+  from?: string;
+  to?: string;
+  loop?: boolean;
+  relation?: string;
+  amount?: number | null;
+}
+
+export interface AgentStructuredResponse {
+  message?: string;
+  insights?: {
+    title?: string;
+    severity?: 'HIGH' | 'MEDIUM' | 'LOW';
+    summary?: string;
+    evidence?: string[];
+  }[];
+  graph?: {
+    nodes?: AgentGraphNode[];
+    edges?: AgentGraphEdge[];
+  };
 }
 
 export interface MessagePart {
@@ -226,9 +273,114 @@ export function getConnected(nodeId: string): Set<string> {
   return s;
 }
 
+export function getConnectedFromEdges(nodeId: string, edges: EdgeData[]): Set<string> {
+  const s = new Set<string>([nodeId]);
+  edges.forEach((e) => {
+    if (e.from === nodeId) s.add(e.to);
+    if (e.to === nodeId) s.add(e.from);
+  });
+  return s;
+}
+
 export function chipLevel(flag: string): 'HIGH' | 'MEDIUM' | 'LOW' | 'neutral' {
   if (flag.includes('HIGH') || flag.includes('ZERO') || flag.includes('LOOP')) return 'HIGH';
   if (flag.includes('MEDIUM') || flag.includes('SHARED')) return 'MEDIUM';
   if (flag.includes('LOW')) return 'LOW';
   return 'neutral';
+}
+
+function stableId(value: string, fallback: string): string {
+  const id = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return id || fallback;
+}
+
+function shortLabel(label: string): string {
+  return label
+    .replace(/\b(foundation|association|organization|charity|canada|incorporated|inc)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 24) || label.slice(0, 24);
+}
+
+function isRiskLevel(value: unknown): value is RiskLevel {
+  return value === 'HIGH' || value === 'MEDIUM' || value === 'LOW' || value === null;
+}
+
+function isNodeType(value: unknown): value is NodeType {
+  return value === 'org' || value === 'director';
+}
+
+export function graphFromAgentResponse(graph: AgentStructuredResponse['graph']): GraphData | null {
+  if (!graph?.nodes?.length) return null;
+
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  const count = graph.nodes.length;
+  const nodes = graph.nodes.map((node, i): NodeData => {
+    const label = node.label?.trim() || node.short?.trim() || `Entity ${i + 1}`;
+    const id = stableId(node.id || label, `node-${i + 1}`);
+    const type = isNodeType(node.type) ? node.type : 'org';
+    const risk = type === 'director' ? null : isRiskLevel(node.risk) ? node.risk : null;
+    const y = count === 1 ? 0 : 1 - (i / (count - 1)) * 2;
+
+    return {
+      id,
+      label,
+      short: node.short?.trim() || shortLabel(label),
+      type,
+      risk,
+      bn: node.bn ?? null,
+      flags: Array.isArray(node.flags) && node.flags.length ? node.flags : [type === 'director' ? 'DIRECTOR' : 'REVIEW'],
+      brief: node.brief?.trim() || 'Included in the latest agent-generated investigation graph.',
+      phi: Math.acos(Math.max(-1, Math.min(1, y))),
+      theta: goldenAngle * i,
+    };
+  });
+
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const aliases = new Map<string, string>();
+  graph.nodes.forEach((node, i) => {
+    [node.id, node.label, node.short].forEach((value) => {
+      if (value) aliases.set(value, nodes[i].id);
+    });
+  });
+
+  const resolveNodeId = (value?: string): string | null => {
+    if (!value) return null;
+    if (nodeIds.has(value)) return value;
+    return aliases.get(value) ?? null;
+  };
+
+  const edges = (graph.edges ?? []).flatMap((edge): EdgeData[] => {
+    const from = resolveNodeId(edge.from);
+    const to = resolveNodeId(edge.to);
+    if (!from || !to) return [];
+
+    return [{
+      from,
+      to,
+      loop: Boolean(edge.loop),
+      relation: edge.relation,
+      amount: edge.amount ?? null,
+    }];
+  });
+
+  return { nodes, edges };
+}
+
+export function insightsFromAgentResponse(insights: AgentStructuredResponse['insights']): InsightData[] {
+  if (!Array.isArray(insights)) return [];
+
+  return insights.flatMap((insight): InsightData[] => {
+    if (!insight?.title && !insight?.summary) return [];
+
+    return [{
+      title: insight.title?.trim() || 'Investigation insight',
+      severity: insight.severity ?? 'LOW',
+      summary: insight.summary?.trim() || 'The agent returned this as a notable observation.',
+      evidence: Array.isArray(insight.evidence) ? insight.evidence.filter(Boolean) : [],
+    }];
+  });
 }

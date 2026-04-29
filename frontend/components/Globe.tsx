@@ -3,14 +3,14 @@
 import React, { useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import {
-  NODES,
-  EDGES,
   GLOBE_R,
   nodeColor3,
   nodeColorHex,
-  getConnected,
+  getConnectedFromEdges,
   TweakValues,
   TWEAK_DEFAULTS,
+  NodeData,
+  EdgeData,
 } from './data';
 
 interface GlobeRef {
@@ -42,6 +42,8 @@ interface EdgeObj {
 }
 
 interface GlobeProps {
+  nodes: NodeData[];
+  edges: EdgeData[];
   tweaks: TweakValues;
   selectedNode: string | null;
   hoveredNode: string | null;
@@ -77,6 +79,8 @@ function makeGlowTex(hexStr: string): THREE.CanvasTexture {
 }
 
 export default function Globe({
+  nodes,
+  edges,
   tweaks,
   selectedNode,
   hoveredNode,
@@ -152,7 +156,7 @@ export default function Globe({
 
     /* Nodes */
     const nodeObjs: NodeObj[] = [];
-    NODES.forEach((node) => {
+    nodes.forEach((node) => {
       const center = sph(node.phi, node.theta);
       const isDir = node.type === 'director';
       const size = isDir ? 3.8 : 5.5;
@@ -182,9 +186,10 @@ export default function Globe({
 
     /* Edges */
     const edgeObjs: EdgeObj[] = [];
-    EDGES.forEach((edge) => {
-      const fN = NODES.find((n) => n.id === edge.from)!;
-      const tN = NODES.find((n) => n.id === edge.to)!;
+    edges.forEach((edge) => {
+      const fN = nodes.find((n) => n.id === edge.from);
+      const tN = nodes.find((n) => n.id === edge.to);
+      if (!fN || !tN) return;
       const p0 = sph(fN.phi, fN.theta);
       const p1 = sph(tN.phi, tN.theta);
       const mid = p0.clone().add(p1).multiplyScalar(0.5);
@@ -322,14 +327,13 @@ export default function Globe({
       window.removeEventListener('resize', onResize);
       renderer.dispose();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [nodes, edges, onNodeClick, onNodeHover]);
 
   /* ── Update node visuals on selection/hover change ── */
   useEffect(() => {
     const gl = glRef.current;
     if (!gl?.nodeObjs) return;
-    const conn = selectedNode ? getConnected(selectedNode) : null;
+    const conn = selectedNode ? getConnectedFromEdges(selectedNode, edges) : null;
 
     gl.nodeObjs.forEach(({ nodeId, mat, sprMat }) => {
       const hov = hoveredNode === nodeId;
@@ -342,16 +346,17 @@ export default function Globe({
         sprMat.opacity = c ? (nodeId === selectedNode ? 1.0 : 0.72) : 0.04;
       }
     });
-  }, [selectedNode, hoveredNode]);
+  }, [selectedNode, hoveredNode, edges]);
 
   /* ── Refined edge visibility using EDGES data ── */
   useEffect(() => {
     const gl = glRef.current;
     if (!gl?.edgeObjs) return;
-    const conn = selectedNode ? getConnected(selectedNode) : null;
+    const conn = selectedNode ? getConnectedFromEdges(selectedNode, edges) : null;
 
     gl.edgeObjs.forEach((eo, i) => {
-      const edge = EDGES[i];
+      const edge = edges[i];
+      if (!edge) return;
       if (!conn) {
         eo.linMat.opacity = eo.opBase;
         return;
@@ -359,7 +364,7 @@ export default function Globe({
       const touches = edge.from === selectedNode || edge.to === selectedNode;
       eo.linMat.opacity = touches ? Math.min(1, eo.opBase * 1.8) : eo.opBase * 0.06;
     });
-  }, [selectedNode]);
+  }, [selectedNode, edges]);
 
   /* ── Dark/light mode + dot/wire tweaks ── */
   useEffect(() => {
@@ -376,13 +381,13 @@ export default function Globe({
     }
     if (gl.nodeObjs) {
       gl.nodeObjs.forEach(({ nodeId, mat }) => {
-        const node = NODES.find((n) => n.id === nodeId);
+        const node = nodes.find((n) => n.id === nodeId);
         if (node?.type === 'director') {
           mat.color.set(tweaks.darkMode ? 0xffffff : 0x222233);
         }
       });
     }
-  }, [tweaks.darkMode, tweaks.dotOpacity, tweaks.wireOpacity]);
+  }, [tweaks.darkMode, tweaks.dotOpacity, tweaks.wireOpacity, nodes]);
 
   /* ── Dot size ── */
   useEffect(() => {
@@ -419,11 +424,12 @@ export default function Globe({
     const gl = glRef.current;
     if (!gl?.edgeObjs) return;
     gl.edgeObjs.forEach((eo, i) => {
-      const edge = EDGES[i];
+      const edge = edges[i];
+      if (!edge) return;
       eo.linMat.opacity = edge.loop ? 0.82 : 0.38 * (tweaks.edgeOpacity / 0.5);
       eo.opBase = edge.loop ? 0.82 : 0.38 * (tweaks.edgeOpacity / 0.5);
     });
-  }, [tweaks.edgeOpacity]);
+  }, [tweaks.edgeOpacity, edges]);
 
   return (
     <canvas

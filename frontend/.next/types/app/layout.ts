@@ -1,4 +1,4 @@
-// File: /Users/larry/agency-2026-adk-agent-mountain-sheep/frontend/app/layout.tsx
+// File: C:\Users\anush\Downloads\agency-2026-adk-agent-mountain-sheep\frontend\app\layout.tsx
 import * as entry from '../../../app/layout.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

@@ -2,13 +2,14 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import { NODES, CHAT_INIT, TWEAK_DEFAULTS, TweakValues, ChatMessage, NodeData } from './data';
+import { NODES, EDGES, CHAT_INIT, TWEAK_DEFAULTS, TweakValues, ChatMessage, NodeData, EdgeData, InsightData } from './data';
 import TopBar from './TopBar';
 import ChatPanel from './ChatPanel';
 import InfoBar from './InfoBar';
 import NodeTooltip from './NodeTooltip';
 import TweaksPanel from './TweaksPanel';
 import Legend from './Legend';
+import InsightsPanel from './InsightsPanel';
 
 // Globe uses Three.js — must be client-only with no SSR
 const Globe = dynamic(() => import('./Globe'), { ssr: false });
@@ -32,6 +33,9 @@ export default function App() {
   const [messages,     setMessages]     = useState<ChatMessage[]>(CHAT_INIT);
   const [inputVal,     setInputVal]     = useState('');
   const [mp,           setMp]           = useState({ x: 0, y: 0 });
+  const [graphNodes,   setGraphNodes]   = useState<NodeData[]>(NODES);
+  const [graphEdges,   setGraphEdges]   = useState<EdgeData[]>(EDGES);
+  const [insights,     setInsights]     = useState<InsightData[]>([]);
 
   /* Stable event handlers passed to Globe */
   const onNodeClick = useCallback((nodeId: string | null) => {
@@ -45,12 +49,12 @@ export default function App() {
         setInfoVisible(false);
         return null;
       }
-      const nd = NODES.find((n) => n.id === nodeId) ?? null;
+      const nd = graphNodes.find((n) => n.id === nodeId) ?? null;
       setInfoNode(nd);
       setInfoVisible(true);
       return nodeId;
     });
-  }, []);
+  }, [graphNodes]);
 
   const onNodeHover = useCallback((nodeId: string | null) => {
     setHoveredNode(nodeId);
@@ -68,6 +72,15 @@ export default function App() {
     setSelectedNode(null);
   }, []);
 
+  const onGraphUpdate = useCallback((nodes: NodeData[], edges: EdgeData[], nextInsights: InsightData[]) => {
+    setGraphNodes(nodes);
+    setGraphEdges(edges);
+    setInsights(nextInsights);
+    setSelectedNode(null);
+    setInfoNode(null);
+    setInfoVisible(false);
+  }, []);
+
   return (
     <div style={{
       width: '100vw', height: '100vh', overflow: 'hidden',
@@ -77,6 +90,8 @@ export default function App() {
       fontFamily: 'var(--font-ibm-plex-sans), system-ui, sans-serif',
     }}>
       <Globe
+        nodes={graphNodes}
+        edges={graphEdges}
         tweaks={tweaks}
         selectedNode={selectedNode}
         hoveredNode={hoveredNode}
@@ -101,6 +116,7 @@ export default function App() {
         setMessages={setMessages}
         inputVal={inputVal}
         setInputVal={setInputVal}
+        onGraphUpdate={onGraphUpdate}
       />
 
       <InfoBar
@@ -111,7 +127,7 @@ export default function App() {
       />
 
       {hoveredNode && !selectedNode && (
-        <NodeTooltip nodeId={hoveredNode} mp={mp} isDark={isDark} />
+        <NodeTooltip nodeId={hoveredNode} nodes={graphNodes} mp={mp} isDark={isDark} />
       )}
 
       <TweaksPanel
@@ -122,6 +138,8 @@ export default function App() {
       />
 
       <Legend isDark={isDark} />
+
+      <InsightsPanel insights={insights} isDark={isDark} chatOpen={chatOpen} />
     </div>
   );
 }

@@ -2,7 +2,15 @@
 
 import React, { useRef, useEffect, useState } from 'react';
 import RiskChip from './RiskChip';
-import { ChatMessage } from './data';
+import {
+  AgentStructuredResponse,
+  ChatMessage,
+  EdgeData,
+  InsightData,
+  NodeData,
+  graphFromAgentResponse,
+  insightsFromAgentResponse,
+} from './data';
 
 interface BubbleProps {
   msg: ChatMessage;
@@ -106,10 +114,35 @@ interface ChatPanelProps {
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   inputVal: string;
   setInputVal: (v: string) => void;
+  onGraphUpdate: (nodes: NodeData[], edges: EdgeData[], insights: InsightData[]) => void;
+}
+
+function parseStructuredResponse(text: string): AgentStructuredResponse | null {
+  const stripped = text
+    .trim()
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/```$/i, '')
+    .trim();
+
+  const start = stripped.indexOf('{');
+  const end = stripped.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+
+  try {
+    const parsed: unknown = JSON.parse(stripped.slice(start, end + 1));
+    if (parsed && typeof parsed === 'object') {
+      return parsed as AgentStructuredResponse;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }
 
 export default function ChatPanel({
-  open, setOpen, isDark, messages, setMessages, inputVal, setInputVal,
+  open, setOpen, isDark, messages, setMessages, inputVal, setInputVal, onGraphUpdate,
 }: ChatPanelProps) {
   const scrollRef  = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<string | null>(null);
@@ -206,11 +239,24 @@ export default function ChatPanel({
       }
 
       const responseText = lastModelText || 'No response from agent.';
+      const structured = parseStructuredResponse(responseText);
+      const graph = graphFromAgentResponse(structured?.graph);
+      const insights = insightsFromAgentResponse(structured?.insights);
+      const displayText = structured?.message?.trim() || responseText;
+
+      if (graph) {
+        onGraphUpdate(graph.nodes, graph.edges, insights);
+      }
 
       setMessages((p) => [...p, {
         id: Date.now() + 1,
         role: 'agent',
-        parts: [{ type: 'text', v: responseText }],
+        parts: [{
+          type: 'text',
+          v: structured || !responseText.trim()
+            ? displayText
+            : `${displayText}\n\nCould not parse structured graph JSON from this response.`,
+        }],
       }]);
     } catch (err) {
       // Clear session so next send will create a fresh one

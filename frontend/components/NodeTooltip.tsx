@@ -1,16 +1,17 @@
 'use client';
 
 import React from 'react';
-import { NODES, nodeColorHex } from './data';
+import { NodeData, nodeColorHex } from './data';
 
 interface NodeTooltipProps {
   nodeId: string;
+  nodes: NodeData[];
   mp: { x: number; y: number };
   isDark: boolean;
 }
 
-export default function NodeTooltip({ nodeId, mp, isDark }: NodeTooltipProps) {
-  const node = NODES.find((n) => n.id === nodeId);
+export default function NodeTooltip({ nodeId, nodes, mp, isDark }: NodeTooltipProps) {
+  const node = nodes.find((n) => n.id === nodeId);
   if (!node) return null;
 
   const bg     = isDark ? 'rgba(10,11,18,0.96)' : 'rgba(240,240,246,0.96)';
