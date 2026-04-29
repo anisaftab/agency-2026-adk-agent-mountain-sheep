@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import RiskChip from './RiskChip';
 import { ChatMessage } from './data';
 
@@ -56,6 +56,48 @@ function Bubble({ msg, isDark }: BubbleProps) {
   );
 }
 
+function LoadingBubble({ isDark }: { isDark: boolean }) {
+  const bubbleBg     = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
+  const bubbleBorder = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)';
+  const muted        = isDark ? '#44445a' : '#8888a0';
+
+  return (
+    <div style={{
+      display: 'flex', justifyContent: 'flex-start',
+      marginBottom: '10px', gap: '7px', alignItems: 'flex-start',
+      animation: 'fade-in 0.25s ease both',
+    }}>
+      <div style={{
+        width: '22px', height: '22px', borderRadius: '50%', flexShrink: 0,
+        background: 'rgba(124,109,250,0.18)', border: '1px solid rgba(124,109,250,0.35)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: '9px', color: '#9d93fb', fontWeight: 700,
+      }}>
+        AI
+      </div>
+      <div style={{
+        background: bubbleBg,
+        border: `1px solid ${bubbleBorder}`,
+        borderRadius: '2px 8px 8px 8px',
+        padding: '8px 11px',
+        fontSize: '12px',
+        lineHeight: '1.6',
+        color: muted,
+        display: 'flex',
+        alignItems: 'center',
+        gap: '7px',
+      }}>
+        <span style={{ animation: 'pulse-dot 1.4s ease infinite' }}>●</span>
+        <span style={{ animation: 'pulse-dot 1.4s ease 0.2s infinite' }}>●</span>
+        <span style={{ animation: 'pulse-dot 1.4s ease 0.4s infinite' }}>●</span>
+        <span style={{ marginLeft: '4px', fontSize: '11px', letterSpacing: '0.04em' }}>
+          Investigating…
+        </span>
+      </div>
+    </div>
+  );
+}
+
 interface ChatPanelProps {
   open: boolean;
   setOpen: (v: boolean) => void;
@@ -70,6 +112,8 @@ export default function ChatPanel({
   open, setOpen, isDark, messages, setMessages, inputVal, setInputVal,
 }: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [isLoading, setIsLoading] = useState(false);
+
   const panelBg = isDark ? 'rgba(8,9,14,0.97)' : 'rgba(245,245,247,0.97)';
   const border  = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)';
   const tc      = isDark ? '#e4e4ec' : '#111118';
@@ -79,23 +123,63 @@ export default function ChatPanel({
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, open]);
+  }, [messages, open, isLoading]);
 
-  const send = () => {
+  const send = async () => {
     const txt = inputVal.trim();
-    if (!txt) return;
-    setMessages((p) => [...p, { id: Date.now(), role: 'user', parts: [{ type: 'text', v: txt }] }]);
+    if (!txt || isLoading) return;
+
+    setMessages((p) => [...p, {
+      id: Date.now(),
+      role: 'user',
+      parts: [{ type: 'text', v: txt }],
+    }]);
     setInputVal('');
-    setTimeout(() => {
-      setMessages((p) => [
-        ...p,
+    setIsLoading(true);
+
+    try {
+      const response = await fetch(
+        'http://localhost:8000/apps/app/users/user_1/sessions/session_1/runs',
         {
-          id: Date.now() + 1,
-          role: 'agent',
-          parts: [{ type: 'text', v: 'Analyzing query against CRA filings database. Cross-referencing director registry and funding records...' }],
-        },
-      ]);
-    }, 850);
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            new_message: {
+              role: 'user',
+              parts: [{ text: txt }],
+            },
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      // ADK returns an array of events; find the last agent text response
+      const agentEvents = data.filter((e: Record<string, unknown>) => {
+        const content = e.content as { role?: string; parts?: { text?: string }[] } | undefined;
+        return content?.role === 'model' && content?.parts?.[0]?.text;
+      });
+
+      const lastResponse = agentEvents[agentEvents.length - 1] as
+        | { content: { parts: { text: string }[] } }
+        | undefined;
+      const responseText =
+        lastResponse?.content?.parts?.[0]?.text ?? 'No response from agent.';
+
+      setMessages((p) => [...p, {
+        id: Date.now() + 1,
+        role: 'agent',
+        parts: [{ type: 'text', v: responseText }],
+      }]);
+    } catch {
+      setMessages((p) => [...p, {
+        id: Date.now() + 1,
+        role: 'agent',
+        parts: [{ type: 'text', v: 'Error connecting to investigation agent.' }],
+      }]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -171,6 +255,7 @@ export default function ChatPanel({
           SESSION STARTED · APR 29 2026
         </div>
         {messages.map((m) => <Bubble key={m.id} msg={m} isDark={isDark} />)}
+        {isLoading && <LoadingBubble isDark={isDark} />}
       </div>
 
       {/* Input */}
@@ -182,32 +267,56 @@ export default function ChatPanel({
           value={inputVal}
           onChange={(e) => setInputVal(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && send()}
-          placeholder="Ask the agent…"
+          placeholder={isLoading ? 'Agent is responding…' : 'Ask the agent…'}
+          disabled={isLoading}
           style={{
             flex: 1,
             background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)',
-            border: `1px solid ${border}`,
+            border: `1px solid ${isLoading ? 'rgba(124,109,250,0.2)' : border}`,
             borderRadius: '6px',
             padding: '7px 10px',
             fontSize: '12px',
-            color: tc,
+            color: isLoading ? muted : tc,
             fontFamily: 'var(--font-ibm-plex-sans), sans-serif',
+            cursor: isLoading ? 'not-allowed' : 'text',
+            opacity: isLoading ? 0.6 : 1,
           }}
         />
         <button
           onClick={send}
+          disabled={isLoading}
           style={{
             width: '32px', height: '32px', borderRadius: '6px', flexShrink: 0,
-            background: '#7c6dfa', border: 'none', cursor: 'pointer',
+            background: isLoading ? 'rgba(124,109,250,0.4)' : '#7c6dfa',
+            border: 'none',
+            cursor: isLoading ? 'not-allowed' : 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transition: 'background 0.15s',
           }}
         >
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <path d="M2 7h10M7.5 2.5l4.5 4.5-4.5 4.5"
-              stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          {isLoading ? (
+            <svg
+              width="14" height="14" viewBox="0 0 14 14" fill="none"
+              style={{ animation: 'spin 0.8s linear infinite' }}
+            >
+              <circle cx="7" cy="7" r="5.5" stroke="white" strokeWidth="1.5"
+                strokeDasharray="20 14" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M2 7h10M7.5 2.5l4.5 4.5-4.5 4.5"
+                stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          )}
         </button>
       </div>
+
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to   { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 }
