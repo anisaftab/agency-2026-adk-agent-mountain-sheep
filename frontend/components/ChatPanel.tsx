@@ -153,14 +153,17 @@ export default function ChatPanel({
     try {
       const sessionId = await getSessionId();
 
-      // POST /run — RunAgentRequest uses snake_case (Python/Pydantic)
-      const response = await fetch('/adk/run', {
+      // Use /run_sse (Server-Sent Events) instead of /run.
+      // The agent can take 60–120s to finish all BigQuery queries + LLM hops;
+      // the streaming response keeps data flowing so the proxy never times out.
+      const response = await fetch('/adk/run_sse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           app_name:    'app',
           user_id:     'user_1',
           session_id:  sessionId,
+          streaming:   false,
           new_message: {
             role:  'user',
             parts: [{ text: txt }],
@@ -168,24 +171,41 @@ export default function ChatPanel({
         }),
       });
 
-      if (!response.ok) {
+      if (!response.ok || !response.body) {
         const errText = await response.text().catch(() => response.statusText);
         throw new Error(`Agent returned ${response.status}: ${errText}`);
       }
 
-      const data = await response.json();
+      // Parse the SSE stream. Each event arrives as `data: {json}\n\n`.
+      const reader  = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let lastModelText = '';
 
-      // ADK returns an array of events; find the last model text response
-      const agentEvents = (Array.isArray(data) ? data : []).filter((e: Record<string, unknown>) => {
-        const content = e.content as { role?: string; parts?: { text?: string }[] } | undefined;
-        return content?.role === 'model' && content?.parts?.[0]?.text;
-      });
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
 
-      const lastResponse = agentEvents[agentEvents.length - 1] as
-        | { content: { parts: { text: string }[] } }
-        | undefined;
-      const responseText =
-        lastResponse?.content?.parts?.[0]?.text ?? 'No response from agent.';
+        // SSE events are separated by blank lines.
+        const events = buffer.split('\n\n');
+        buffer = events.pop() ?? '';
+
+        for (const evt of events) {
+          const line = evt.split('\n').find((l) => l.startsWith('data:'));
+          if (!line) continue;
+          try {
+            const payload  = JSON.parse(line.slice(5).trim());
+            const content  = payload.content as { role?: string; parts?: { text?: string }[] } | undefined;
+            const textPart = content?.parts?.find((p) => p.text)?.text;
+            if (content?.role === 'model' && textPart) {
+              lastModelText = textPart;
+            }
+          } catch { /* malformed chunk; skip */ }
+        }
+      }
+
+      const responseText = lastModelText || 'No response from agent.';
 
       setMessages((p) => [...p, {
         id: Date.now() + 1,
