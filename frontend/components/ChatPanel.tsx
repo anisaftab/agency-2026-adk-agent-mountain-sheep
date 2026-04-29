@@ -111,7 +111,8 @@ interface ChatPanelProps {
 export default function ChatPanel({
   open, setOpen, isDark, messages, setMessages, inputVal, setInputVal,
 }: ChatPanelProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollRef  = useRef<HTMLDivElement>(null);
+  const sessionRef = useRef<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   const panelBg = isDark ? 'rgba(8,9,14,0.97)' : 'rgba(245,245,247,0.97)';
@@ -124,6 +125,18 @@ export default function ChatPanel({
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages, open, isLoading]);
+
+  // Returns an existing session ID or creates a new one.
+  // POST /apps/{app}/users/{user}/sessions with NO body → ADK returns { id, ... }
+  const getSessionId = async (): Promise<string> => {
+    if (sessionRef.current) return sessionRef.current;
+    const res = await fetch('/adk/apps/app/users/user_1/sessions', { method: 'POST' });
+    if (!res.ok) throw new Error(`Session creation failed: ${res.status}`);
+    const session = await res.json();
+    const id: string = session.id ?? session.session_id ?? session.sessionId;
+    sessionRef.current = id;
+    return id;
+  };
 
   const send = async () => {
     const txt = inputVal.trim();
@@ -138,24 +151,32 @@ export default function ChatPanel({
     setIsLoading(true);
 
     try {
-      const response = await fetch(
-        'http://localhost:8000/apps/app/users/user_1/sessions/session_1/runs',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            new_message: {
-              role: 'user',
-              parts: [{ text: txt }],
-            },
-          }),
-        }
-      );
+      const sessionId = await getSessionId();
+
+      // POST /run — RunAgentRequest uses snake_case (Python/Pydantic)
+      const response = await fetch('/adk/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          app_name:    'app',
+          user_id:     'user_1',
+          session_id:  sessionId,
+          new_message: {
+            role:  'user',
+            parts: [{ text: txt }],
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => response.statusText);
+        throw new Error(`Agent returned ${response.status}: ${errText}`);
+      }
 
       const data = await response.json();
 
-      // ADK returns an array of events; find the last agent text response
-      const agentEvents = data.filter((e: Record<string, unknown>) => {
+      // ADK returns an array of events; find the last model text response
+      const agentEvents = (Array.isArray(data) ? data : []).filter((e: Record<string, unknown>) => {
         const content = e.content as { role?: string; parts?: { text?: string }[] } | undefined;
         return content?.role === 'model' && content?.parts?.[0]?.text;
       });
@@ -171,11 +192,14 @@ export default function ChatPanel({
         role: 'agent',
         parts: [{ type: 'text', v: responseText }],
       }]);
-    } catch {
+    } catch (err) {
+      // Clear session so next send will create a fresh one
+      sessionRef.current = null;
+      const detail = err instanceof Error ? err.message : String(err);
       setMessages((p) => [...p, {
         id: Date.now() + 1,
         role: 'agent',
-        parts: [{ type: 'text', v: 'Error connecting to investigation agent.' }],
+        parts: [{ type: 'text', v: `Connection error: ${detail}` }],
       }]);
     } finally {
       setIsLoading(false);

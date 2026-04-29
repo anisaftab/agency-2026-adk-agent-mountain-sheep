@@ -13,14 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import datetime
-from zoneinfo import ZoneInfo
-
 from google.adk.agents import Agent
 from google.adk.apps import App
 from google.adk.models import Gemini
-from google.adk.tools import McpToolset
-from mcp import StdioServerParameters
 from google.genai import types
 
 from .spotlight_tools import spotlight_tools
@@ -33,16 +28,20 @@ os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
 os.environ["GOOGLE_CLOUD_LOCATION"] = "global"
 os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "True"
 
-bigquery_project = os.environ.get("BIGQUERY_PROJECT")
+from google.cloud import bigquery
+from google.adk.tools import FunctionTool
 
-# Initialize the MCP Toolset for Conversational Analytics
-mcp_toolset = McpToolset(
-    connection_params=StdioServerParameters(
-        command="./toolbox",
-        args=["--prebuilt", "bigquery", "--stdio"],
-        env={**os.environ, "BIGQUERY_PROJECT": bigquery_project} if bigquery_project else os.environ,
-    )
-)
+def query_funding_data(sql: str) -> str:
+    """Run a SQL query against the Canadian charity and funding database."""
+    try:
+        client = bigquery.Client(project="agency2026ot-rocky--0429")
+        results = client.query(sql).result()
+        rows = [dict(row) for row in results]
+        return str(rows[:20])
+    except Exception as e:
+        return f"Query error: {str(e)}"
+
+query_tool = FunctionTool(func=query_funding_data)
 
 root_agent = Agent(
     name="conversational_analytics_agent",
@@ -51,31 +50,34 @@ root_agent = Agent(
         retry_options=types.HttpRetryOptions(attempts=3),
     ),
     instruction=(
-        # System instructions for the agent
-        "You are a sophisticated Conversational Analytics Agent and investigative researcher. "
-        "Your goal is to help users analyze data by accessing data sources through your tools. "
-        "Use the BigQuery tools provided via the MCP toolset to query and analyze financial/government data. "
-        
-        # The datasets you have access to include:
-        "CRITICAL DATA DICTIONARY - ALWAYS REFER TO THIS:"
-        "- `fed` dataset: Federal Grants & Contributions. (Tables: `grants_contributions`, `agreement_type_lookup`, `recipient_type_lookup`)."
-        "- `ab` dataset: Alberta Open Data (Tables: `ab_grants`, `ab_contracts`, `ab_sole_source`, `ab_non_profit`)."
-        "- `entity_golden_records` table: Canonical entity records mapping aliases and BNs to per-dataset profiles."
-        "DATABASE RULES:"
-        "1. NEVER guess table schemas. Always use the MCP tools to list tables and get schema definitions before writing SQL."
-        "2. When joining across datasets, always use `entity_golden_records` as the authoritative cross-reference bridge.",
-        "3. Always always check the table schema before sql queries, and ensure your SQL is compatible with the schema. If you get an error, check the schema again and adjust your SQL accordingly."
-        
-        # Spotlight Tools:
-        "When investigating suspicious entities, charities, or grants, use the Spotlight tools "
-        "(search_news_archives and load_web_page) to cross-reference data with real-world news, "
-        "websites, and media presence. "
-
-        # Emphasize that a lack of web presence or news mentions can be a red flag for shell entities, while a strong web presence can help validate legitimacy.
-        "Always prioritize accuracy and provide clear explanations of your findings, highlighting "
-        "if an entity lacks a web presence or has a controversial history."
+    "You are an autonomous investigative analyst for the Agency 2026 hackathon. "
+    "You have access to Canadian charity and government funding data in BigQuery. "
+    
+    "CRITICAL: When a user asks you to investigate, find suspicious charities, or start an investigation, "
+    "you MUST immediately run SQL queries without asking for clarification. Just do it. "
+    
+    "YOUR INVESTIGATION PROCESS - run these steps automatically: "
+    
+    "STEP 1 - Find suspicious orgs: Query `agency2026ot-data-1776775157.cra.overhead_by_charity` "
+    "WHERE programs = 0 AND compensation > 0 AND revenue BETWEEN 100000 AND 10000000 "
+    "ORDER BY strict_overhead_pct DESC LIMIT 5. "
+    
+    "STEP 2 - Pick the most suspicious org from results. "
+    
+    "STEP 3 - Check directors: Query `agency2026ot-data-1776775157.cra.cra_directors` "
+    "for that org's bn. Find if those directors appear on other orgs. "
+    
+    "STEP 4 - Check funding loops: Query `agency2026ot-data-1776775157.cra.loop_participants` "
+    "joined with `agency2026ot-data-1776775157.cra.loops` for that bn. "
+    
+    "STEP 5 - Search news: Use search_news_archives tool with the org name. "
+    
+    "STEP 6 - Output a structured brief with: org name, BN, key flags, dollar amounts, findings. "
+    "End with: 'These findings warrant investigation. They are not conclusions of wrongdoing.' "
+    
+    "Never ask clarifying questions. Never wait for permission. Just investigate and report."
     ),
-    tools=[mcp_toolset, *spotlight_tools],
+    tools=[query_tool, *spotlight_tools]
 )
 
 app = App(
